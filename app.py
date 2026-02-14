@@ -1,9 +1,10 @@
-import os
 import time
 import streamlit as st
 import pandas as pd
 import duckdb
 from dotenv import load_dotenv
+
+from config import cfg_bool, cfg_str, cfg_int
 
 from llm import generate_sql_json
 from safety import validate_and_fix_sql
@@ -18,18 +19,8 @@ from observability import log_event, read_events_df, get_prices_from_env, estima
 
 load_dotenv()
 
-def cfg(name: str, default=None):
-    v = os.getenv(name)
-    if v is not None and v != "":
-        return v
-    try:
-        return st.secrets.get(name, default)
-    except Exception:
-        return default
-
 st.set_page_config(page_title="Conversational Dataset Explorer", layout="wide")
 
-#Session State
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "db" not in st.session_state:
@@ -40,69 +31,47 @@ if "sample_rows" not in st.session_state:
     st.session_state.sample_rows = None
 if "saved" not in st.session_state:
     st.session_state.saved = load_saved()
-
-
-# SQL editor state
 if "edited_sql" not in st.session_state:
     st.session_state.edited_sql = ""
 if "pending_editor_sql" not in st.session_state:
     st.session_state.pending_editor_sql = None
-
-# Metrics + observability
 if "metrics" not in st.session_state:
     st.session_state.metrics = load_metrics()
-
 if "last_error" not in st.session_state:
     st.session_state.last_error = None
 if "last_info" not in st.session_state:
     st.session_state.last_info = None
 if "last_question" not in st.session_state:
     st.session_state.last_question = None
-
-# Cost controls
 if "max_output_tokens" not in st.session_state:
     st.session_state.max_output_tokens = 800
 if "reasoning_effort" not in st.session_state:
-    st.session_state.reasoning_effort = "low"  
+    st.session_state.reasoning_effort = "low"
 if "session_token_budget" not in st.session_state:
     st.session_state.session_token_budget = 50_000
 if "session_tokens_used" not in st.session_state:
     st.session_state.session_tokens_used = 0
-
 if "dataset_sig" not in st.session_state:
     st.session_state.dataset_sig = None
 if "chat_prompt" not in st.session_state:
     st.session_state.chat_prompt = ""
 if "pending_chat_prompt" not in st.session_state:
     st.session_state.pending_chat_prompt = None
+if "session_llm_calls" not in st.session_state:
+    st.session_state.session_llm_calls = 0
+if "last_llm_ts" not in st.session_state:
+    st.session_state.last_llm_ts = 0.0
+if "df_for_profile" not in st.session_state:
+    st.session_state.df_for_profile = None
 
-
-
-
-PUBLIC_DEMO = str(cfg("PUBLIC_DEMO", "false")).lower() in ("1","true","yes")
-
-def _env_int(name: str, default: int) -> int:
-    try:
-        return int(os.getenv(name, str(default)))
-    except Exception:
-        return default
-
-def _env_str(name: str, default: str) -> str:
-    return (os.getenv(name, default) or default).strip()
-
-PUBLIC_REASONING_EFFORT = cfg_str("PUBLIC_REASONING_EFFORT", "low")
+PUBLIC_DEMO = cfg_bool("PUBLIC_DEMO", False)
+PUBLIC_REASONING_EFFORT = cfg_str("PUBLIC_REASONING_EFFORT", "low").lower()
 PUBLIC_MAX_OUTPUT_TOKENS = cfg_int("PUBLIC_MAX_OUTPUT_TOKENS", 600)
 PUBLIC_SESSION_TOKEN_BUDGET = cfg_int("PUBLIC_SESSION_TOKEN_BUDGET", 20000)
 PUBLIC_MAX_LLM_CALLS = cfg_int("PUBLIC_MAX_LLM_CALLS", 25)
 PUBLIC_MIN_SECONDS_BETWEEN_CALLS = cfg_int("PUBLIC_MIN_SECONDS_BETWEEN_CALLS", 2)
 PUBLIC_MAX_PROMPT_CHARS = cfg_int("PUBLIC_MAX_PROMPT_CHARS", 1500)
 PUBLIC_MAX_ROWS = cfg_int("PUBLIC_MAX_ROWS", 200000)
-
-if "session_llm_calls" not in st.session_state:
-    st.session_state.session_llm_calls = 0
-if "last_llm_ts" not in st.session_state:
-    st.session_state.last_llm_ts = 0.0
-
 
 def init_duckdb_with_df(df: pd.DataFrame):
     con = duckdb.connect(database=":memory:")
@@ -112,10 +81,8 @@ def init_duckdb_with_df(df: pd.DataFrame):
     sample_rows = con.execute("SELECT * FROM data LIMIT 10").df()
     return con, schema, sample_rows
 
-
 def run_query(con, sql: str) -> pd.DataFrame:
     return con.execute(sql).df()
-
 
 def _apply_pending_editor_sql():
     if st.session_state.pending_editor_sql is not None:
@@ -126,7 +93,6 @@ def _apply_pending_chat_prompt():
     if st.session_state.pending_chat_prompt is not None:
         st.session_state.chat_prompt = st.session_state.pending_chat_prompt
         st.session_state.pending_chat_prompt = None
-
 
 def _save_current_insight():
     if "last_sql" not in st.session_state or "last_result" not in st.session_state:
@@ -229,8 +195,6 @@ def build_suggested_questions():
             seen.add(s)
     return out[:10]
 
-
-#user interface
 st.title("Conversational Dataset Explorer — Chat with your data")
 
 left, right = st.columns([1.4, 1.0], gap="large")
@@ -240,24 +204,10 @@ with left:
     uploaded = st.file_uploader("Upload a CSV", type=["csv"])
 
     if uploaded is not None:
-        df = pd.read_csv(uploaded)
-        if PUBLIC_DEMO and len(df) > PUBLIC_MAX_ROWS:
-            st.error(f"Public demo limit: dataset too large ({len(df):,} rows). Max is {PUBLIC_MAX_ROWS:,}.")
-            st.stop()
-
-        con, schema, sample_rows = init_duckdb_with_df(df)
-        st.session_state.db = con
-        st.session_state.schema = schema
-        st.session_state.sample_rows = sample_rows
-
         current_sig = (uploaded.name, uploaded.size)
+        is_new_dataset = (st.session_state.dataset_sig != current_sig) or (st.session_state.db is None)
 
-        # Reset state when new file is uploaded.
-        is_new_dataset = (st.session_state.dataset_sig != current_sig)
-
-        if is_new_dataset or st.session_state.db is None:
-            st.session_state.dataset_sig = current_sig
-
+        if is_new_dataset:
             df = pd.read_csv(uploaded)
             if PUBLIC_DEMO and len(df) > PUBLIC_MAX_ROWS:
                 st.error(f"Public demo limit: dataset too large ({len(df):,} rows). Max is {PUBLIC_MAX_ROWS:,}.")
@@ -267,8 +217,9 @@ with left:
             st.session_state.db = con
             st.session_state.schema = schema
             st.session_state.sample_rows = sample_rows
+            st.session_state.df_for_profile = df
+            st.session_state.dataset_sig = current_sig
 
-            # Reset only dataset-dependent state
             st.session_state.messages = []
             for k in ["last_sql", "last_result", "last_meta", "last_question"]:
                 if k in st.session_state:
@@ -278,12 +229,14 @@ with left:
             st.session_state.session_llm_calls = 0
             st.session_state.last_llm_ts = 0.0
             st.session_state.pending_editor_sql = None
-
             st.session_state.pending_chat_prompt = None
+            st.session_state.chat_prompt = ""
 
-        with st.expander("Dataset profile", expanded=False):
-            prof = profile_df(df)
-            st.dataframe(prof, width="stretch")
+        dfp = st.session_state.df_for_profile
+        if dfp is not None:
+            with st.expander("Dataset profile", expanded=False):
+                prof = profile_df(dfp)
+                st.dataframe(prof, width="stretch")
 
         st.caption("Inside SQL, the table name is **data**.")
 
@@ -296,18 +249,15 @@ with left:
         cols = st.columns(2)
         for i, q in enumerate(qs):
             if cols[i % 2].button(q, key=f"suggest_{i}"):
-                # Prefill the chat input
                 st.session_state.pending_chat_prompt = q
 
     _apply_pending_chat_prompt()
     prompt = st.chat_input("Ask a question about your dataset...", key="chat_prompt")
 
-
     if prompt:
         if st.session_state.db is None:
             st.warning("Upload a CSV first.")
         else:
-            # Budget check (soft)
             if st.session_state.session_tokens_used >= st.session_state.session_token_budget:
                 st.warning("Session token budget reached. Increase budget in Observability tab or restart session.")
             else:
@@ -324,33 +274,32 @@ with left:
                             if len(prompt) > PUBLIC_MAX_PROMPT_CHARS:
                                 st.warning(f"Public demo limit: prompt too long ({len(prompt)} chars). Max is {PUBLIC_MAX_PROMPT_CHARS}.")
                                 st.stop()
-                        
+
                             now = time.time()
                             if now - st.session_state.last_llm_ts < PUBLIC_MIN_SECONDS_BETWEEN_CALLS:
                                 wait_s = int(PUBLIC_MIN_SECONDS_BETWEEN_CALLS - (now - st.session_state.last_llm_ts))
-                                st.warning(f"Rate limit: try again in {max(wait_s,1)}s.")
+                                st.warning(f"Rate limit: try again in {max(wait_s, 1)}s.")
                                 st.stop()
-                        
+
                             if st.session_state.session_llm_calls >= PUBLIC_MAX_LLM_CALLS:
                                 st.warning("Public demo limit: max LLM calls reached for this session. Refresh to start a new session.")
                                 st.stop()
-                        
+
                             if st.session_state.session_tokens_used >= PUBLIC_SESSION_TOKEN_BUDGET:
                                 st.warning("Public demo limit: session token budget reached. Refresh to start a new session.")
                                 st.stop()
-                        
-                        
+
                         effective_reasoning = PUBLIC_REASONING_EFFORT if PUBLIC_DEMO else st.session_state.reasoning_effort
                         effective_max_out = PUBLIC_MAX_OUTPUT_TOKENS if PUBLIC_DEMO else int(st.session_state.max_output_tokens)
-                        
+
                         st.session_state.last_llm_ts = time.time()
                         st.session_state.session_llm_calls += 1
-                        
+
                         llm_out = generate_sql_json(
                             question=prompt,
                             schema_df=schema_df,
                             sample_df=sample_df,
-                            chat_history=st.session_state.messages[-4:],  
+                            chat_history=st.session_state.messages[-4:],
                             metrics=st.session_state.metrics,
                             reasoning_effort=None if effective_reasoning == "none" else effective_reasoning,
                             max_output_tokens=effective_max_out,
@@ -443,14 +392,10 @@ with left:
                                     "ok": False,
                                 })
 
-
 with right:
     st.subheader("Component Panel")
     tabs = st.tabs(["Output", "Input", "Saved", "Metrics", "Observability"])
 
-
-    # Render Order Saved -> Input -> Output
-    #Saved Tab
     with tabs[2]:
         if not st.session_state.saved:
             st.info("No saved insights yet.")
@@ -506,7 +451,6 @@ with right:
                                     "ok": False,
                                 })
 
-    #Input tab
     with tabs[1]:
         if "last_sql" in st.session_state:
             st.code(st.session_state.last_sql, language="sql")
@@ -545,7 +489,6 @@ with right:
         else:
             st.info("No SQL yet.")
 
-    #Output tab
     with tabs[0]:
         if st.session_state.get("last_error"):
             st.error(st.session_state.last_error)
@@ -574,7 +517,6 @@ with right:
         else:
             st.info("Run a question to see results here.")
 
-    #Metrics Tab
     with tabs[3]:
         st.caption("Define reusable business metrics (semantic layer). Use metric names in questions: “<metric> by <dimension>”.")
         metrics = st.session_state.metrics
@@ -623,7 +565,6 @@ with right:
                 save_metrics(st.session_state.metrics)
                 st.success(f"Deleted: {to_delete}")
 
-    #Observability tab
     with tabs[4]:
         st.subheader("Observability + Cost Controls")
 
@@ -673,4 +614,3 @@ with right:
                 st.caption(f"Total tokens (logged): {tot}")
 
             st.dataframe(df_logs.tail(80), width="stretch", height=320)
-

@@ -6,7 +6,7 @@ def cfg(name: str, default: Any = None) -> Any:
     if v is not None and v != "":
         return v
     try:
-        import streamlit as s
+        import streamlit as st
         return st.secrets.get(name, default)
     except Exception:
         return default
