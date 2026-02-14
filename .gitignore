@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+saved_insights.json
+.venv/
+venv/
+.DS_Store
+logs/
+metrics.json
+.streamlit/secrets.toml
