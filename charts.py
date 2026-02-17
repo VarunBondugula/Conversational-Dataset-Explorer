@@ -13,7 +13,7 @@ def render_chart(df, chart_spec: dict):
     color = chart_spec.get("color")
 
     if not x or not y or x not in df.columns or y not in df.columns:
-        st.caption("Chart spec didn’t match returned columns; skipping chart.")
+        st.caption("Chart spec didn’t match returned columns, skipping.")
         return
 
     try:
@@ -23,14 +23,9 @@ def render_chart(df, chart_spec: dict):
             fig = px.bar(df, x=x, y=y, color=color) if color else px.bar(df, x=x, y=y)
         st.plotly_chart(fig, width="stretch")
     except Exception:
-        st.caption("Could not render chart for this output.")
+        st.caption("Could not render chart.")
 
 def fallback_chart_spec(df: pd.DataFrame):
-    """
-    If the model doesn't return a chart spec, attempt a reasonable default.
-    - Prefer (datetime + numeric) -> line
-    - Else (category + numeric) -> bar
-    """
     if df is None or df.empty or len(df.columns) < 2:
         return None
 
@@ -42,7 +37,7 @@ def fallback_chart_spec(df: pd.DataFrame):
     # Get datetime type columns
     datetime_cols = [c for c in cols if is_datetime64_any_dtype(df[c])]
 
-    # Try to parse a likely date string column if datetime not found
+    # Try to parse a likely date string column
     if not datetime_cols:
         for c in cols:
             if df[c].dtype == object:
@@ -51,7 +46,6 @@ def fallback_chart_spec(df: pd.DataFrame):
                     continue
                 try:
                     parsed = pd.to_datetime(sample, errors="raise", utc=False)
-                    # If most parse, treat as datetime candidate
                     if parsed.notna().mean() >= 0.7:
                         datetime_cols.append(c)
                         break
@@ -62,7 +56,6 @@ def fallback_chart_spec(df: pd.DataFrame):
     if datetime_cols and numeric_cols:
         return {"type": "line", "x": datetime_cols[0], "y": numeric_cols[0], "color": None}
 
-    # Else bar: pick first non-numeric as category and first numeric as value
     if numeric_cols:
         cat_cols = [c for c in cols if c not in numeric_cols]
         if cat_cols:

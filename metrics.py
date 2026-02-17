@@ -16,7 +16,7 @@ def normalize_metric_name(name: str) -> str:
 
 def validate_metric_name(name: str) -> None:
     if not _NAME_RE.match(name):
-        raise ValueError("Metric name must not contain spaces (use _ instead) (2-64 chars), start with a letter, and contain only a-z, 0-9, _.")
+        raise ValueError("Metric name must not contain spaces (use _ instead) (2-64 chars), start with a letter, and be alphanumerical.")
 
 def parse_aliases(raw: str) -> List[str]:
     if not raw:

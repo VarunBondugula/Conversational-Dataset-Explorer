@@ -41,7 +41,7 @@ def _call_openai(user_prompt: str, model: Optional[str], reasoning_effort: Optio
 
     api_key = cfg_str("OPENAI_API_KEY", "")
     if not api_key:
-        raise ValueError("Missing OPENAI_API_KEY (set env var or Streamlit secrets).")
+        raise ValueError("Missing OPENAI_API_KEY.")
     
     client = OpenAI(api_key=api_key)
     

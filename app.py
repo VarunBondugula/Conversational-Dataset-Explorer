@@ -259,7 +259,7 @@ with left:
             st.warning("Upload a CSV first.")
         else:
             if st.session_state.session_tokens_used >= st.session_state.session_token_budget:
-                st.warning("Session token budget reached. Increase budget in Observability tab or restart session.")
+                st.warning("Session token budget reached.")
             else:
                 st.session_state.messages.append({"role": "user", "content": prompt})
                 with st.chat_message("user"):
@@ -518,7 +518,7 @@ with right:
             st.info("Run a question to see results here.")
 
     with tabs[3]:
-        st.caption("Define reusable business metrics (semantic layer). Use metric names in questions: “<metric> by <dimension>”.")
+        st.caption("Define reusable datset metrics (lightweight semantic layer). Can use metric names in questions.")
         metrics = st.session_state.metrics
 
         if metrics:
